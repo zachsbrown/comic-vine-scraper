@@ -450,7 +450,7 @@ class ComicBook(object):
        
       bd = self.__bookdata
       publisher_s = issue.publisher_s # publisher and (maybe) imprint owner
-      imprint_s = issue.imprint_s # imprint, or '' if one there isn't one
+      imprint_s = issue.imprint_s , or '' if one there isn't one
       
       # 1. the user may have defined their own custom imprint mappings.  
       # if so, they will override any previously applied imprints
@@ -479,9 +479,11 @@ class ComicBook(object):
          imprint_s = ''
       
       # imprint -------------------
-      value = self.__massage_new_string("Imprint", imprint_s, \
+      # use publisher as fallback if no imprint exists
+      imprint_fallback = imprint_s if imprint_s else publisher_s
+      value = self.__massage_new_string("Imprint", imprint_fallback, \
          bd.imprint_s, config.update_imprint_b, config.ow_existing_b, \
-         config.ignore_blanks_b )
+         config.ignore_blanks_b)
       if value is None: bd.dont_update("imprint_s")
       else: bd.imprint_s = value
             
