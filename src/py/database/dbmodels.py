@@ -267,6 +267,7 @@ class Issue(object):
       
       self.volume_year_n = -1
       self.rating_n = 0.0
+      self.format_s = ''
       
       self.crossovers_sl = []
       self.characters_sl = []
