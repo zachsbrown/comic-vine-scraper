@@ -82,7 +82,7 @@ def _parse_key_tag(text_s):
    
    tag_found = re.search(r'(?i)CVDB(\d{1,})', text_s)
    if not tag_found:
-      tag_found = re.search(r'(?i)ComicVine.?\[(\d{1,})', text_s); # old !
+      tag_found = re.search(r'(?i)ComicVine.?\[(\d{1,})', text_s); # old format!
    return int(tag_found.group(1).lower()) if tag_found else None
 
 
@@ -493,7 +493,115 @@ def _query_issue(issue_ref, slow_data):
    return issue
 
 
+#===========================================================================
+def __issue_parse_simple_stuff(issue, dom):
+   ''' Parses in the 'easy' parts of the DOM '''
 
+   if is_string(dom.results.id):
+      issue.issue_key = dom.results.id
+   if is_string(dom.results.volume.id):
+      issue.series_key = dom.results.volume.id
+   if is_string(dom.results.volume.name):
+      issue.series_name_s = dom.results.volume.name.strip()
+   if is_string(dom.results.issue_number):
+      issue.issue_num_s = dom.results.issue_number.strip()
+   if is_string(dom.results.site_detail_url) and \
+         dom.results.site_detail_url.startswith("http"):
+      issue.webpage_s = dom.results.site_detail_url
+   if is_string(dom.results.name):
+      issue.title_s = dom.results.name.strip();
+      
+# grab the published (front cover) date - stored in cover_date field
+   # but we populate pub_ fields from store_date (in-store release date)
+   # so that ComicRack's Year/Month filters reflect the actual on-sale date.
+   # Fall back to cover_date if store_date is absent.
+   _date_str = None
+   if "store_date" in dom.results.__dict__ and \
+      is_string(dom.results.store_date) and \
+      len(dom.results.store_date) > 1:
+      _date_str = dom.results.store_date
+   elif "cover_date" in dom.results.__dict__ and \
+      is_string(dom.results.cover_date) and \
+      len(dom.results.cover_date) > 1:
+      _date_str = dom.results.cover_date
+   if _date_str:
+      try:
+         parts = [int(x) for x in _date_str.split('-')]
+         issue.pub_year_n = parts[0] if len(parts) >= 1 else None
+         issue.pub_month_n = parts[1] if len(parts) >= 2 else None
+         issue.pub_day_n = parts[2] if len(parts) >= 3 else None
+      except:
+         pass # got an unrecognized date format...? should be "YYYY-MM-DD"
+
+   # grab the released (in store) date
+   if "store_date" in dom.results.__dict__ and \
+      is_string(dom.results.store_date) and \
+      len(dom.results.store_date) > 1:
+      try:
+         parts = [int(x) for x in dom.results.store_date.split('-')]
+         issue.rel_year_n = parts[0] if len(parts) >= 1 else None
+         issue.rel_month_n = parts[1] if len(parts) >= 2 else None
+         issue.rel_day_n = parts[2] if len(parts) >= 3 else None
+      except:
+         pass # got an unrecognized date format...? should be "YYYY-MM-DD"
+
+   # infer Format from issue/volume name and issue number,
+   # since ComicVine has no format field.
+   # Only runs if format_s is not already set (protects manual edits).
+   if not issue.format_s:
+      _format_keywords = [
+         ("hardcover",       "HC"),
+         ("hard cover",      "HC"),
+         ("omnibus",         "Omnibus"),
+         ("trade paperback", "TPB"),
+         ("tpb",             "TPB"),
+         (" hc",             "HC"),
+         ("annual",          "Annual"),
+         ("one-shot",        "One-Shot"),
+         ("one shot",        "One-Shot"),
+         ("special",         "Special"),
+         ("giant-size",      "Giant-Size"),
+         ("giant size",      "Giant-Size"),
+         ("3-d",             "3-D"),
+         ("3d",              "3-D"),
+         ("black & white",   "Black & White"),
+         ("black and white", "Black & White"),
+         ("b&w",             "Black & White"),
+         ("gallery",         "Gallery"),
+      ]
+      _vol_name = ""
+      if hasattr(dom.results, "volume") and dom.results.volume:
+         if hasattr(dom.results.volume, "name") and \
+            is_string(dom.results.volume.name):
+            _vol_name = dom.results.volume.name
+      _issue_name = dom.results.name \
+         if hasattr(dom.results, "name") and \
+         is_string(dom.results.name) else ""
+      _name_to_check = (_issue_name + " " + _vol_name).lower()
+
+      for _keyword, _format_value in _format_keywords:
+         if _keyword in _name_to_check:
+            issue.format_s = _format_value
+            break
+
+      # infer format from issue number if still unset
+      if not issue.format_s and \
+         hasattr(dom.results, "issue_number") and \
+         is_string(dom.results.issue_number):
+         _inum = dom.results.issue_number.strip()
+         if _inum in ("1/2", "0.5", ".5", "½"):
+            issue.format_s = "½"
+         elif _inum in ("0", "0.0"):
+            issue.format_s = "Issue #0"
+      
+   # grab the image for this issue and store it as the first element
+   # in the list of issue urls.
+   image_url_s = __parse_image_url(dom.results)
+   if image_url_s:
+      issue.image_urls_sl.append(image_url_s)
+      
+
+#===========================================================================
 def __issue_parse_series_details(issue, dom):
    ''' Parses the current comic's series details out of the DOM '''
    
@@ -523,7 +631,7 @@ def __issue_parse_series_details(issue, dom):
          try:
             volume_year_n = int(series_dom.results.start_year)
          except:
-            pass # bad start year ...just keep going
+            pass # bad start year format...just keep going
       
       # publisher
       publisher_s = ''
@@ -536,13 +644,12 @@ def __issue_parse_series_details(issue, dom):
    
    # check if there's the current publisher really is the true publisher, or
    # if it's really an imprint of another publisher.
-   # If imprint is blank, insert publisher as imprint
    issue.publisher_s = cvimprints.find_parent_publisher(publisher_s)
    if issue.publisher_s != publisher_s:
       issue.imprint_s = publisher_s
-   else:
-      issue.imprint_s = issue.publisher_s
    issue.volume_year_n = volume_year_n
+
+
             
 #===========================================================================               
 def __issue_parse_story_credits(issue, dom):
